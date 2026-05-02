@@ -696,13 +696,35 @@ if (!app) {
 app.innerHTML = `
   <main class="shell">
     <section class="intro-panel">
-      <div>
+      <div class="intro-copy">
         <p class="eyebrow">Temporal 3D harbor simulator</p>
         <h1>Fishing town to port metropolis.</h1>
         <p class="lede">
           Scrub from an ancient fishing cove to a 1990 industrial port city with
           historically grounded boats, buildings, harbor works, weather, and growth.
         </p>
+        <p class="key-hints" aria-label="Keyboard camera controls">
+          <span>A left</span>
+          <span>S down</span>
+          <span>D right</span>
+          <span>W up</span>
+          <span>Q rotate ccw</span>
+          <span>E rotate cw</span>
+        </p>
+      </div>
+      <div class="metrics header-metrics" aria-label="Simulation metrics">
+        <div>
+          <span>Fleet</span>
+          <strong id="fleet-readout">—</strong>
+        </div>
+        <div>
+          <span>Annual catch</span>
+          <strong id="catch-readout">—</strong>
+        </div>
+        <div>
+          <span>Harbor build-out</span>
+          <strong id="buildout-readout">—</strong>
+        </div>
       </div>
       <article class="era-card header-era-card">
         <p class="eyebrow">Current era</p>
@@ -753,22 +775,6 @@ app.innerHTML = `
             )
             .join('')}
         </div>
-
-        <div class="metrics">
-          <div>
-            <span>Fleet</span>
-            <strong id="fleet-readout">—</strong>
-          </div>
-          <div>
-            <span>Annual catch</span>
-            <strong id="catch-readout">—</strong>
-          </div>
-          <div>
-            <span>Harbor build-out</span>
-            <strong id="buildout-readout">—</strong>
-          </div>
-        </div>
-
       </aside>
     </section>
   </main>
@@ -849,8 +855,10 @@ sunLight.shadow.camera.far = 220
 
 const fillLight = new THREE.DirectionalLight('#9dc9ff', 0.85)
 fillLight.position.set(25, 20, -28)
+const lightningLight = new THREE.PointLight('#dbeafe', 0, 170, 1.5)
+lightningLight.position.set(-8, 30, -20)
 
-scene.add(hemiLight, sunLight, fillLight)
+scene.add(hemiLight, sunLight, fillLight, lightningLight)
 
 const terrainGroup = new THREE.Group()
 const harborGroup = new THREE.Group()
@@ -865,7 +873,9 @@ const smokePuffs: THREE.Mesh[] = []
 const animatedBoats: THREE.Group[] = []
 const movingVehicles: THREE.Group[] = []
 const gulls: THREE.Group[] = []
+const lightningBolts: THREE.LineSegments[] = []
 let rainLines: THREE.LineSegments | null = null
+let whitecapLines: THREE.LineSegments | null = null
 
 const oceanGeometry = createOceanGeometry()
 const oceanPosition = oceanGeometry.getAttribute('position') as THREE.BufferAttribute
@@ -894,6 +904,12 @@ let isPlaying = false
 let continuousYear = state.year
 let lastSignature = ''
 let frame = 0
+const pressedCameraKeys = new Set<string>()
+const cameraForward = new THREE.Vector3()
+const cameraRight = new THREE.Vector3()
+const cameraMove = new THREE.Vector3()
+const cameraOffset = new THREE.Vector3()
+const worldUp = new THREE.Vector3(0, 1, 0)
 
 for (const definition of sliderDefinitions) {
   const input = sliderInputs.get(definition.key)!
@@ -914,6 +930,18 @@ playButton.addEventListener('click', () => {
 })
 
 window.addEventListener('resize', resizeRenderer)
+window.addEventListener('keydown', (event) => {
+  const key = event.key.toLowerCase()
+  if (event.metaKey || event.ctrlKey || !['a', 's', 'd', 'w', 'q', 'e'].includes(key)) {
+    return
+  }
+
+  event.preventDefault()
+  pressedCameraKeys.add(key)
+})
+window.addEventListener('keyup', (event) => {
+  pressedCameraKeys.delete(event.key.toLowerCase())
+})
 
 resizeRenderer()
 applySimulation()
@@ -940,6 +968,7 @@ renderer.setAnimationLoop(() => {
   animateBoats(elapsed)
   animateCity(elapsed)
   animateAtmosphere(elapsed, delta)
+  updateKeyboardCamera(delta)
   controls.update()
   composer.render()
 })
@@ -971,6 +1000,51 @@ function applySimulation() {
   rebuildBoats()
   rebuildAtmosphere()
   updateLighting()
+}
+
+function updateKeyboardCamera(delta: number) {
+  if (pressedCameraKeys.size === 0) {
+    return
+  }
+
+  camera.getWorldDirection(cameraForward)
+  cameraForward.y = 0
+  if (cameraForward.lengthSq() < 0.0001) {
+    cameraForward.set(0, 0, -1)
+  } else {
+    cameraForward.normalize()
+  }
+
+  cameraRight.crossVectors(cameraForward, worldUp).normalize()
+  cameraMove.set(0, 0, 0)
+
+  if (pressedCameraKeys.has('w')) {
+    cameraMove.add(cameraForward)
+  }
+  if (pressedCameraKeys.has('s')) {
+    cameraMove.sub(cameraForward)
+  }
+  if (pressedCameraKeys.has('d')) {
+    cameraMove.add(cameraRight)
+  }
+  if (pressedCameraKeys.has('a')) {
+    cameraMove.sub(cameraRight)
+  }
+
+  if (cameraMove.lengthSq() > 0) {
+    const panSpeed = Math.max(14, camera.position.distanceTo(controls.target) * 0.42) * delta
+    cameraMove.normalize().multiplyScalar(panSpeed)
+    camera.position.add(cameraMove)
+    controls.target.add(cameraMove)
+  }
+
+  const rotationDirection = (pressedCameraKeys.has('q') ? 1 : 0) - (pressedCameraKeys.has('e') ? 1 : 0)
+  if (rotationDirection !== 0) {
+    const angle = rotationDirection * delta * 1.25
+    cameraOffset.copy(camera.position).sub(controls.target).applyAxisAngle(worldUp, angle)
+    camera.position.copy(controls.target).add(cameraOffset)
+    camera.lookAt(controls.target)
+  }
 }
 
 function syncUi() {
@@ -1140,14 +1214,7 @@ function buildStaticTerrain() {
   land.receiveShadow = true
   terrainGroup.add(land)
 
-  const beachMaterial = makeMaterial('#d9c08a', 0.86, 'sand', 0)
-  beachMaterial.side = THREE.DoubleSide
-  const beach = new THREE.Mesh(new THREE.RingGeometry(15, 25, 96, 1, 0.18, Math.PI * 0.74), beachMaterial)
-  beach.rotation.x = -Math.PI / 2
-  beach.rotation.z = 0.11
-  beach.position.set(-1.2, 0.105, -7.2)
-  beach.scale.set(2.35, 0.86, 1)
-  terrainGroup.add(beach)
+  addShoreSandBands()
 
   addHill(-86, 34, 16, 6.1, '#4f713f')
   addHill(-65, 47, 12, 4.8, '#5a7b46')
@@ -1186,6 +1253,53 @@ function buildStaticTerrain() {
   for (const [x, z, scale] of treeSites) {
     terrainGroup.add(createTree(x, z, scale))
   }
+}
+
+function addShoreSandBands() {
+  const bands = [
+    [-108, -82, 2.2, 0.45, '#c7ad75'],
+    [-63, -42, 1.6, 0.35, '#d1b982'],
+    [-23, 14, 2.4, 0.5, '#d6bd82'],
+    [18, 43, 1.8, 0.4, '#cdb57d'],
+    [62, 94, 2.1, 0.45, '#d5c08b'],
+  ] as const
+
+  for (const [startX, endX, landWidth, waterWidth, color] of bands) {
+    terrainGroup.add(createShoreBand(startX, endX, landWidth, waterWidth, color))
+  }
+}
+
+function createShoreBand(startX: number, endX: number, landWidth: number, waterWidth: number, color: string) {
+  const steps = 16
+  const landEdge: [number, number][] = []
+  const waterEdge: [number, number][] = []
+
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps
+    const x = THREE.MathUtils.lerp(startX, endX, t)
+    const shoreline = shorelineZ(x)
+    const ripple = Math.sin(t * Math.PI * 3 + startX * 0.04) * 0.35
+    landEdge.push([x, shoreline + landWidth + ripple])
+    waterEdge.push([x, shoreline - waterWidth + ripple * 0.25])
+  }
+
+  const shape = new THREE.Shape()
+  moveShapeTo(shape, landEdge[0][0], landEdge[0][1])
+  for (const [x, z] of landEdge.slice(1)) {
+    lineShapeTo(shape, x, z)
+  }
+  for (const [x, z] of [...waterEdge].reverse()) {
+    lineShapeTo(shape, x, z)
+  }
+  lineShapeTo(shape, landEdge[0][0], landEdge[0][1])
+
+  const material = makeMaterial(color, 0.88, 'sand', 0)
+  material.side = THREE.DoubleSide
+  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape, 12), material)
+  mesh.rotation.x = -Math.PI / 2
+  mesh.position.y = 0.13
+  mesh.receiveShadow = true
+  return mesh
 }
 
 function rebuildHarbor() {
@@ -1246,6 +1360,8 @@ function rebuildHarbor() {
       }
     }
   }
+
+  addHarborBasinDetails(oceanLevel)
 
   if (calculateMetrics().coastalExposure > 57 || (state.year >= 1965 && state.seaLevel > 55)) {
     addFloodBoards(oceanLevel)
@@ -1428,7 +1544,9 @@ function rebuildBoats() {
 function rebuildAtmosphere() {
   clearGroup(atmosphereGroup)
   gulls.length = 0
+  lightningBolts.length = 0
   rainLines = null
+  whitecapLines = null
 
   const cloudCount = clamp(Math.round(8 + state.storminess / 7), 8, 24)
   for (let i = 0; i < cloudCount; i += 1) {
@@ -1453,27 +1571,44 @@ function rebuildAtmosphere() {
     rainLines = createRain()
     atmosphereGroup.add(rainLines)
   }
+
+  if (state.storminess > 42) {
+    whitecapLines = createWhitecaps()
+    atmosphereGroup.add(whitecapLines)
+  }
+
+  if (state.storminess > 54) {
+    atmosphereGroup.add(createStormShelfCloud())
+  }
+
+  if (state.storminess > 64) {
+    for (let i = 0; i < 3; i += 1) {
+      const bolt = createLightningBolt(-34 + i * 28 + pseudo(i) * 8, -20 - pseudo(i + 4) * 18, 18 + pseudo(i + 8) * 9)
+      lightningBolts.push(bolt)
+      atmosphereGroup.add(bolt)
+    }
+  }
 }
 
 function updateLighting() {
   const storm = state.storminess / 100
   const modern = smoothstep(state.year, 1965, 1990)
   const ancientWarmth = 1 - smoothstep(state.year, -500, 1750)
-  skyColor.setHSL(0.55 - ancientWarmth * 0.04, 0.68 - storm * 0.36, 0.66 - storm * 0.25)
+  skyColor.setHSL(0.56 - ancientWarmth * 0.04, 0.66 - storm * 0.26, 0.66 - storm * 0.34)
   scene.background = skyColor
-  scene.fog = new THREE.Fog(skyColor.clone(), 58 - storm * 16, 235 - storm * 70)
-  hemiLight.intensity = 1.25 - storm * 0.34 + modern * 0.12
-  sunLight.intensity = 3.6 - storm * 2.2
-  fillLight.intensity = 0.82 + storm * 0.28
-  oceanMaterial.color.setHSL(0.53, 0.72 - storm * 0.24, 0.39 - storm * 0.13)
-  oceanMaterial.roughness = 0.16 + storm * 0.34
+  scene.fog = new THREE.Fog(skyColor.clone(), 82 - storm * 10, 255 - storm * 38)
+  hemiLight.intensity = 1.28 - storm * 0.18 + modern * 0.12
+  sunLight.intensity = 3.5 - storm * 1.45
+  fillLight.intensity = 0.88 + storm * 0.42
+  oceanMaterial.color.setHSL(0.54, 0.72 - storm * 0.18, 0.39 - storm * 0.17)
+  oceanMaterial.roughness = 0.16 + storm * 0.42
   bloomPass.strength = 0.2 + modern * 0.12 + (1 - storm) * 0.03
-  renderer.toneMappingExposure = 1.12 - storm * 0.24
+  renderer.toneMappingExposure = 1.12 - storm * 0.1
 }
 
 function animateOcean(elapsed: number) {
   const storm = state.storminess / 100
-  const waveAmp = 0.18 + storm * 0.72
+  const waveAmp = 0.16 + storm * 0.96
   const oceanLevel = getOceanLevel()
 
   for (let i = 0; i < oceanPosition.count; i += 1) {
@@ -1483,7 +1618,8 @@ function animateOcean(elapsed: number) {
       oceanLevel +
       Math.sin(x * 0.16 + elapsed * (0.85 + storm)) * waveAmp * 0.44 +
       Math.cos(z * 0.18 + elapsed * (1.1 + storm * 1.4)) * waveAmp * 0.28 +
-      Math.sin((x + z) * 0.07 + elapsed * 0.42) * waveAmp * 0.18
+      Math.sin((x + z) * 0.07 + elapsed * 0.42) * waveAmp * 0.18 +
+      Math.sin(x * 0.58 + z * 0.34 + elapsed * (2.4 + storm * 2.1)) * waveAmp * storm * 0.12
     oceanPosition.setY(i, y)
   }
 
@@ -1535,6 +1671,7 @@ function animateCity(elapsed: number) {
 }
 
 function animateAtmosphere(elapsed: number, delta: number) {
+  const storm = state.storminess / 100
   for (const cloud of atmosphereGroup.children) {
     if (cloud.userData.speed) {
       cloud.position.x += (cloud.userData.speed as number) * delta * (1 + state.storminess / 80)
@@ -1559,9 +1696,30 @@ function animateAtmosphere(elapsed: number, delta: number) {
   }
 
   if (rainLines) {
-    rainLines.position.y -= delta * (18 + state.storminess * 0.14)
+    rainLines.position.y -= delta * (22 + state.storminess * 0.2)
+    rainLines.position.x += delta * (1.2 + storm * 5.5)
     if (rainLines.position.y < -10) {
-      rainLines.position.y = 16
+      rainLines.position.y = 18
+      rainLines.position.x = 0
+    }
+  }
+
+  if (whitecapLines) {
+    whitecapLines.position.y = getOceanLevel() + 0.14 + Math.sin(elapsed * 2.8) * 0.05
+    whitecapLines.position.x = Math.sin(elapsed * 0.35) * 1.2
+  }
+
+  const flashPulse =
+    state.storminess > 64
+      ? Math.max(0, Math.sin(elapsed * 1.7 + 1.2)) ** 38 + Math.max(0, Math.sin(elapsed * 0.53 + 4.8)) ** 80
+      : 0
+  const flash = flashPulse > 0.015 ? clamp(flashPulse * state.storminess * 0.12, 0, 8) : 0
+  lightningLight.intensity = flash
+  for (const bolt of lightningBolts) {
+    bolt.visible = flash > 0.35 && pseudo(Math.floor(elapsed * 2) + bolt.id) > 0.22
+    const material = bolt.material
+    if (material instanceof THREE.LineBasicMaterial) {
+      material.opacity = clamp(flash / 6, 0, 0.95)
     }
   }
 
@@ -2189,12 +2347,20 @@ function createPier(x: number, z: number, length: number, width: number, rotatio
   group.rotation.y = rotation
   group.add(box(width, 0.25, length, color, 0, 0.36, -length / 2, 'wood', 0.72))
 
+  for (let plank = 1; plank < length; plank += 1.35) {
+    group.add(box(width + 0.12, 0.035, 0.055, '#d1a36f', 0, 0.51, -plank, 'wood', 0.78))
+  }
+
   const postMaterial = makeMaterial('#4b3427', 0.7, 'wood')
   for (let i = 0; i < Math.floor(length / 2.4); i += 1) {
     for (const side of [-1, 1]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 1.25, 8), postMaterial)
       post.position.set((width / 2 - 0.12) * side, -0.12, -1.2 - i * 2.35)
       group.add(post)
+
+      if (i % 2 === 0) {
+        group.add(createCleat((width / 2 + 0.12) * side, 0.62, -1.2 - i * 2.35, side < 0))
+      }
     }
   }
 
@@ -2205,6 +2371,199 @@ function addQuay(x: number, z: number, width: number, depth: number, rotation: n
   const quay = box(width, 0.72, depth, color, x, 0.28, z, 'concrete', 0.82)
   quay.rotation.y = rotation
   harborGroup.add(quay)
+  addQuayFurniture(x, z, width, depth, rotation)
+}
+
+function addQuayFurniture(x: number, z: number, width: number, depth: number, rotation: number) {
+  const group = new THREE.Group()
+  group.position.set(x, 0, z)
+  group.rotation.y = rotation
+
+  const bollardCount = clamp(Math.floor(width / 4), 3, 12)
+  for (let i = 0; i < bollardCount; i += 1) {
+    const localX = -width / 2 + 1.4 + i * ((width - 2.8) / Math.max(1, bollardCount - 1))
+    group.add(createBollard(localX, 0.84, -depth / 2 - 0.18))
+    group.add(box(0.22, 0.76, 0.28, '#111827', localX, 0.28, -depth / 2 - 0.44, 'rubber', 0.82))
+  }
+
+  group.add(box(width * 0.92, 0.035, 0.08, '#fef3c7', 0, 0.78, -depth / 2 - 0.04, 'metal', 0.44))
+  harborGroup.add(group)
+}
+
+function createBollard(x: number, y: number, z: number) {
+  const group = new THREE.Group()
+  group.position.set(x, y, z)
+  const material = makeMaterial('#111827', 0.5, 'metal', 0.24)
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, 0.38, 12), material)
+  post.position.y = 0.16
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.1, 12), material)
+  cap.position.y = 0.4
+  group.add(post, cap)
+  return group
+}
+
+function createCleat(x: number, y: number, z: number, flip: boolean) {
+  const group = new THREE.Group()
+  group.position.set(x, y, z)
+  group.rotation.y = flip ? Math.PI : 0
+  group.add(box(0.42, 0.08, 0.12, '#111827', 0, 0.06, 0, 'metal', 0.45))
+  group.add(box(0.1, 0.12, 0.22, '#111827', -0.16, 0.1, 0, 'metal', 0.45))
+  group.add(box(0.1, 0.12, 0.22, '#111827', 0.16, 0.1, 0, 'metal', 0.45))
+  return group
+}
+
+function addHarborBasinDetails(oceanLevel: number) {
+  addNavigationBuoys(oceanLevel)
+  addSlipways()
+
+  if (state.year >= 900) {
+    harborGroup.add(createBreakwater(-55, -7.8, 34, 2.4, -0.62, '#ef4444'))
+    harborGroup.add(createBreakwater(55, -10.2, 38, 2.4, 0.55, '#22c55e'))
+  }
+
+  if (state.year >= 1750) {
+    addMooringDolphins(oceanLevel)
+  }
+
+  if (state.year >= 1880) {
+    addHarborServiceYard()
+  }
+}
+
+function addNavigationBuoys(oceanLevel: number) {
+  const buoys = [
+    [-7, -22, '#ef4444'],
+    [7, -23.5, '#22c55e'],
+    [-12, -39, '#ef4444'],
+    [13, -41, '#22c55e'],
+    [-24, -54, '#f59e0b'],
+    [25, -57, '#f59e0b'],
+  ] as const
+
+  for (const [x, z, color] of buoys) {
+    harborGroup.add(createBuoy(x, z, color, oceanLevel))
+  }
+}
+
+function createBuoy(x: number, z: number, color: string, oceanLevel: number) {
+  const group = new THREE.Group()
+  group.position.set(x, oceanLevel + 0.08, z)
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.34, 0.72, 12), makeMaterial(color, 0.46, 'metal', 0.12))
+  body.position.y = 0.28
+  const top = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.42, 12), makeMaterial('#f8fafc', 0.48, 'metal', 0.08))
+  top.position.y = 0.88
+  const anchor = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.02, 0), new THREE.Vector3(0, -1.25, 0)]),
+    new THREE.LineBasicMaterial({ color: '#1f2937', transparent: true, opacity: 0.45 }),
+  )
+  group.add(body, top, anchor)
+  return group
+}
+
+function createBreakwater(x: number, z: number, length: number, width: number, rotation: number, beaconColor: string) {
+  const group = new THREE.Group()
+  group.position.set(x, 0, z)
+  group.rotation.y = rotation
+  group.add(box(width, 0.62, length, '#7b8176', 0, 0.36, -length / 2, 'stone', 0.92))
+  group.add(box(width * 0.42, 0.18, length * 0.92, '#4b5563', 0, 0.78, -length / 2, 'concrete', 0.82))
+
+  for (let i = 0; i < Math.floor(length / 2); i += 1) {
+    for (const side of [-1, 1]) {
+      const rock = box(
+        0.7 + pseudo(i + side * 4) * 0.55,
+        0.38 + pseudo(i + 11) * 0.28,
+        0.62 + pseudo(i + 19) * 0.56,
+        '#626b60',
+        side * (width * 0.62 + pseudo(i + 3) * 0.55),
+        0.26,
+        -1.2 - i * 1.9,
+        'stone',
+        0.96,
+      )
+      rock.rotation.y = pseudo(i + 8) * Math.PI
+      group.add(rock)
+    }
+  }
+
+  group.add(createHarborBeacon(0, 1.02, -length + 1.2, beaconColor))
+  return group
+}
+
+function createHarborBeacon(x: number, y: number, z: number, color: string) {
+  const group = new THREE.Group()
+  group.position.set(x, y, z)
+  group.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 1.15, 12), makeMaterial('#f8fafc', 0.5, 'metal', 0.08)))
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 10), makeMaterial(color, 0.22, 'glass', 0.04))
+  lamp.position.y = 0.72
+  group.add(lamp)
+  const light = new THREE.PointLight(color, 0.55, 14, 1.6)
+  light.position.y = 0.72
+  group.add(light)
+  return group
+}
+
+function addSlipways() {
+  const slips = [
+    [-17, -4.9, 4.2, 8.8, -0.18],
+    [18, -5.2, 4.8, 9.6, 0.16],
+    [-42, -7.2, 3.6, 7.8, -0.34],
+  ] as const
+
+  for (const [x, z, width, length, rotation] of slips) {
+    const group = new THREE.Group()
+    group.position.set(x, 0.08, z)
+    group.rotation.y = rotation
+    const ramp = box(width, 0.16, length, '#9a8f7f', 0, 0.17, -length / 2, 'concrete', 0.86)
+    ramp.rotation.x = -0.05
+    group.add(ramp)
+    group.add(box(0.12, 0.18, length * 0.92, '#475569', -width * 0.35, 0.34, -length / 2, 'metal', 0.45))
+    group.add(box(0.12, 0.18, length * 0.92, '#475569', width * 0.35, 0.34, -length / 2, 'metal', 0.45))
+    harborGroup.add(group)
+  }
+}
+
+function addMooringDolphins(oceanLevel: number) {
+  const sites = [
+    [-28, -13],
+    [-3, -18],
+    [24, -13.5],
+    [44, -18],
+    [-48, -18.5],
+  ] as const
+
+  for (const [x, z] of sites) {
+    const group = new THREE.Group()
+    group.position.set(x, oceanLevel - 0.06, z)
+    for (const offset of [-0.34, 0, 0.34]) {
+      const pile = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 2.1, 10), makeMaterial('#4b3427', 0.78, 'wood'))
+      pile.position.set(offset, 0.82, Math.abs(offset) * 0.6)
+      pile.rotation.z = offset * 0.08
+      group.add(pile)
+    }
+    group.add(box(1.1, 0.18, 0.24, '#4b3427', 0, 1.88, 0.2, 'wood', 0.78))
+    harborGroup.add(group)
+  }
+}
+
+function addHarborServiceYard() {
+  for (let i = 0; i < 8; i += 1) {
+    const rack = new THREE.Group()
+    rack.position.set(-47 + i * 4.2, 0.26, -4.8 + (i % 2) * 1.6)
+    rack.rotation.y = -0.2
+    rack.add(box(1.9, 0.08, 0.08, '#334155', 0, 0.9, 0, 'metal', 0.44))
+    rack.add(box(0.08, 1.2, 0.08, '#334155', -0.82, 0.6, 0, 'metal', 0.44))
+    rack.add(box(0.08, 1.2, 0.08, '#334155', 0.82, 0.6, 0, 'metal', 0.44))
+    const net = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.055, 8, 18), makeMaterial('#0f766e', 0.72, 'rubber'))
+    net.position.y = 0.45
+    net.rotation.x = Math.PI / 2
+    rack.add(net)
+    harborGroup.add(rack)
+  }
+
+  for (let i = 0; i < 10; i += 1) {
+    const pallet = box(1.3, 0.22, 0.86, '#7c4a2d', 24 + (i % 5) * 2.1, 0.62, -4.6 - Math.floor(i / 5) * 1.1, 'wood', 0.78)
+    harborGroup.add(pallet)
+  }
 }
 
 function addShorelineFoam(oceanLevel: number) {
@@ -2517,19 +2876,80 @@ function createCloud(x: number, y: number, z: number, scale: number) {
   group.position.set(x, y, z)
   const storm = state.storminess / 100
   const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color().setHSL(0.6, 0.16, 0.92 - storm * 0.42),
+    color: new THREE.Color().setHSL(0.6, 0.18, 0.92 - storm * 0.5),
     roughness: 0.9,
     transparent: true,
-    opacity: 0.72 + storm * 0.18,
+    opacity: 0.72 + storm * 0.12,
   })
 
   for (let i = 0; i < 5; i += 1) {
     const puff = new THREE.Mesh(new THREE.SphereGeometry((0.8 + pseudo(i) * 0.55) * scale, 16, 12), material)
     puff.position.set((i - 2) * 0.88 * scale, pseudo(i + 5) * 0.45 * scale, pseudo(i + 9) * 0.38 * scale)
+    if (storm > 0.55) {
+      puff.scale.y = 0.68
+    }
     group.add(puff)
   }
 
+  if (storm > 0.62) {
+    group.add(box(4.1 * scale, 0.16 * scale, 1.1 * scale, '#263142', 0, -0.38 * scale, 0, 'plaster', 0.95))
+  }
+
   return group
+}
+
+function createStormShelfCloud() {
+  const group = new THREE.Group()
+  group.position.set(-10, 14.5, -24)
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#263142'),
+    roughness: 0.96,
+    transparent: true,
+    opacity: 0.82,
+  })
+
+  for (let i = 0; i < 16; i += 1) {
+    const cloud = new THREE.Mesh(new THREE.SphereGeometry(2.2 + pseudo(i) * 1.4, 18, 10), material)
+    cloud.position.set(-44 + i * 6.2, pseudo(i + 2) * 1.5, -4 + pseudo(i + 6) * 8)
+    cloud.scale.set(1.55, 0.42, 0.82)
+    group.add(cloud)
+  }
+
+  group.userData.speed = 0.08
+  return group
+}
+
+function createLightningBolt(x: number, z: number, height: number) {
+  const vertices: number[] = []
+  let currentX = x
+  let currentZ = z
+  let currentY = height
+
+  for (let i = 0; i < 7; i += 1) {
+    const nextX = currentX + (pseudo(i + x) - 0.5) * 5.4
+    const nextZ = currentZ + (pseudo(i + z) - 0.5) * 3.6
+    const nextY = height - ((i + 1) / 7) * (height - 2.4)
+    vertices.push(currentX, currentY, currentZ, nextX, nextY, nextZ)
+    if (i === 3) {
+      vertices.push(nextX, nextY, nextZ, nextX + 3.4, nextY - 2.2, nextZ + 1.6)
+    }
+    currentX = nextX
+    currentY = nextY
+    currentZ = nextZ
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  const bolt = new THREE.LineSegments(
+    geometry,
+    new THREE.LineBasicMaterial({
+      color: '#e0f2fe',
+      transparent: true,
+      opacity: 0,
+    }),
+  )
+  bolt.visible = false
+  return bolt
 }
 
 function createGull(index: number) {
@@ -2556,13 +2976,13 @@ function createGull(index: number) {
 }
 
 function createRain() {
-  const count = 260
+  const count = 320 + Math.round(state.storminess * 2.2)
   const vertices: number[] = []
   for (let i = 0; i < count; i += 1) {
     const x = -88 + pseudo(i) * 176
     const y = -2 + pseudo(i + 5) * 34
     const z = -72 + pseudo(i + 9) * 98
-    vertices.push(x, y, z, x + 0.45, y - 1.5, z + 0.05)
+    vertices.push(x, y, z, x + 0.9 + state.storminess * 0.018, y - 2.1, z + 0.08)
   }
 
   const geometry = new THREE.BufferGeometry()
@@ -2570,9 +2990,34 @@ function createRain() {
   return new THREE.LineSegments(
     geometry,
     new THREE.LineBasicMaterial({
-      color: '#b8d7f6',
+      color: '#d7ecff',
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.36 + state.storminess / 260,
+    }),
+  )
+}
+
+function createWhitecaps() {
+  const vertices: number[] = []
+  const count = 90 + Math.round(state.storminess * 0.9)
+  for (let i = 0; i < count; i += 1) {
+    const x = -74 + pseudo(i + 2) * 148
+    const z = -72 + pseudo(i + 5) * 58
+    if (!isWaterPoint(x, z)) {
+      continue
+    }
+    const width = 0.8 + pseudo(i + 7) * 1.8
+    vertices.push(x, 0, z, x + width, 0, z + 0.18 + pseudo(i + 12) * 0.35)
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  return new THREE.LineSegments(
+    geometry,
+    new THREE.LineBasicMaterial({
+      color: '#f8feff',
+      transparent: true,
+      opacity: clamp(state.storminess / 170, 0.24, 0.64),
     }),
   )
 }
