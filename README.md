@@ -22,3 +22,8 @@ Build for production:
 ```sh
 npm run build
 ```
+
+The production build is written to `docs/` for GitHub Pages. The repository is
+configured for Pages at `https://phyous.github.io/fishing-town-sim/`, with a
+GitHub Actions workflow that rebuilds and commits `docs/` after pushes to
+`main`.
