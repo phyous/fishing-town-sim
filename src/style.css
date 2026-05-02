@@ -48,9 +48,9 @@ input {
 
 .intro-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
   gap: 16px;
-  align-items: end;
+  align-items: stretch;
   margin-bottom: 0;
   padding: 10px 14px;
   border: 1px solid rgba(186, 230, 253, 0.18);
@@ -104,13 +104,6 @@ h3 {
   font-size: clamp(0.86rem, 1vw, 1.02rem);
 }
 
-.status-stack {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(150px, 1fr));
-  gap: 8px;
-}
-
-.status-stack div,
 .metrics div {
   min-width: 0;
   padding: 10px 12px;
@@ -119,7 +112,6 @@ h3 {
   background: rgba(2, 8, 23, 0.42);
 }
 
-.status-stack span,
 .metrics span {
   display: block;
   color: #8fb8ca;
@@ -129,7 +121,6 @@ h3 {
   text-transform: uppercase;
 }
 
-.status-stack strong,
 .metrics strong {
   display: block;
   margin-top: 6px;
@@ -321,12 +312,21 @@ h3 {
 }
 
 .era-card {
+  min-width: 0;
   padding: 12px;
   border: 1px solid rgba(45, 212, 191, 0.24);
   border-radius: 24px;
   background:
     linear-gradient(135deg, rgba(20, 184, 166, 0.13), rgba(59, 130, 246, 0.1)),
     rgba(2, 8, 23, 0.36);
+}
+
+.header-era-card {
+  align-self: stretch;
+}
+
+.header-era-card .eyebrow {
+  margin-bottom: 6px;
 }
 
 .era-card p {
@@ -382,10 +382,6 @@ h3 {
     height: auto;
   }
 
-  .status-stack {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .viewport-card {
     min-height: 520px;
   }
@@ -411,7 +407,6 @@ h3 {
     border-radius: 24px;
   }
 
-  .status-stack,
   .metrics {
     grid-template-columns: 1fr;
   }
